@@ -43,4 +43,10 @@ next-env.d.ts
 test-*.js
 test-*.html
 test-*.json
-node_modules
+
+# debug files
+*-debug.*
+debug-*.js
+
+# documentation (keep README.md)
+USAGE.md
