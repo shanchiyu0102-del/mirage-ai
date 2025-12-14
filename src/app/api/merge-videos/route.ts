@@ -73,7 +73,6 @@ async function cleanup(files: string[]) {
 // 下载视频到临时文件
 async function downloadVideo(url: string, filename: string): Promise<string> {
   console.log(`Attempting to download video from: ${url.substring(0, 100)}...`);
-
   const response = await fetch(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
@@ -84,21 +83,18 @@ async function downloadVideo(url: string, filename: string): Promise<string> {
 
   if (!response.ok) {
     console.error(`Download failed for ${filename}: ${response.status} ${response.statusText}`);
-
     // 如果是403 (CORS/Forbidden)，尝试直接返回URL而不下载
     if (response.status === 403) {
       console.log('CORS/403 error detected, will use URL directly');
       // 返回特殊标记，表示使用原始URL
       throw new Error(`CORS_BLOCKED:${url}`);
     }
-
     throw new Error(`Failed to download video: ${response.status} ${response.statusText}`);
   }
 
   const buffer = await response.arrayBuffer();
   const filePath = join(TEMP_DIR, filename);
   await writeFile(filePath, Buffer.from(buffer));
-
   return filePath;
 }
 
@@ -119,10 +115,15 @@ async function checkFFmpeg(): Promise<{ available: boolean; path: string | null 
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const { videoUrls, resolution = '480P' } = await request.json();
+  let videoUrls: string[] = []; // 👈 在函数顶部声明，供 catch 块使用
 
-    if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length === 0) {
+  try {
+    // 👇 解析请求体（关键修复）
+    const requestData = await request.json();
+    videoUrls = requestData.videoUrls || [];
+    const resolution = requestData.resolution || '480P';
+
+    if (!Array.isArray(videoUrls) || videoUrls.length === 0) {
       return NextResponse.json(
         { error: 'Video URLs are required' },
         { status: 400 }
@@ -131,7 +132,6 @@ export async function POST(request: NextRequest) {
 
     // 过滤掉空URL
     const validVideos = videoUrls.filter(url => url && url.trim() !== '');
-
     if (validVideos.length === 0) {
       return NextResponse.json(
         { error: 'No valid video URLs provided' },
@@ -141,14 +141,10 @@ export async function POST(request: NextRequest) {
 
     // 检查FFmpeg是否可用
     const ffmpegCheck = await checkFFmpeg();
-
     if (!ffmpegCheck.available) {
       console.log('FFmpeg not available, returning first video as fallback');
       // 如果FFmpeg不可用，返回第一个视频作为后备
-      return NextResponse.json({
-        mergedVideoUrl: validVideos[0],
-        message: 'FFmpeg not available, returning first video'
-      });
+      return NextResponse.json({ mergedVideoUrl: validVideos[0], message: 'FFmpeg not available, returning first video' });
     }
 
     const ffmpegPath = ffmpegCheck.path!;
@@ -192,10 +188,7 @@ export async function POST(request: NextRequest) {
         // 如果所有视频都被CORS阻塞，返回第一个视频
         if (downloadableVideos.length === 0) {
           console.log('All videos blocked by CORS, returning first video');
-          return NextResponse.json({
-            mergedVideoUrl: validVideos[0],
-            message: 'All videos blocked by CORS, returning first video'
-          });
+          return NextResponse.json({ mergedVideoUrl: validVideos[0], message: 'All videos blocked by CORS, returning first video' });
         }
 
         // 如果部分视频可以下载，只合并可下载的
@@ -203,10 +196,7 @@ export async function POST(request: NextRequest) {
           console.log('Only one video downloadable, returning it');
           // 清理临时文件
           await cleanup(tempFiles);
-          return NextResponse.json({
-            mergedVideoUrl: downloadableVideos[0],
-            message: 'Only one video downloadable'
-          });
+          return NextResponse.json({ mergedVideoUrl: downloadableVideos[0], message: 'Only one video downloadable' });
         }
       }
 
@@ -223,7 +213,6 @@ export async function POST(request: NextRequest) {
       // 使用FFmpeg合并视频
       console.log('Merging videos using FFmpeg at:', ffmpegPath);
       const ffmpegCommand = `"${ffmpegPath}" -f concat -safe 0 -i "${listFilePath}" -c copy "${outputFilePath}"`;
-
       const { stdout, stderr } = await execAsync(ffmpegCommand);
 
       if (stderr && !stderr.includes('deprecated')) {
@@ -237,7 +226,6 @@ export async function POST(request: NextRequest) {
 
       // 返回合并后的视频URL
       const mergedVideoUrl = `/merged-videos/${outputFileName}`;
-
       console.log('Videos merged successfully:', mergedVideoUrl);
 
       // 异步清理临时文件
@@ -245,10 +233,7 @@ export async function POST(request: NextRequest) {
         console.error('Cleanup error:', error);
       });
 
-      return NextResponse.json({
-        mergedVideoUrl,
-        message: 'Videos merged successfully'
-      });
+      return NextResponse.json({ mergedVideoUrl, message: 'Videos merged successfully' });
 
     } catch (error) {
       // 清理临时文件
@@ -259,8 +244,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Video merge error:', error);
 
-    // 返回第一个视频作为后备
-    const videoUrls = request.body?.videoUrls || [];
+    // 👇 使用顶部声明的 videoUrls（关键修复）
     const firstVideo = videoUrls.find((url: string) => url && url.trim() !== '');
 
     if (firstVideo) {
